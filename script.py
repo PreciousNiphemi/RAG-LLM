@@ -1,44 +1,39 @@
-from langchain.document_loaders import TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import create_qa_with_sources_chain
-from langchain.chains import ConversationalRetrievalChain
-import dotenv
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
-dotenv.load_dotenv()
+def scrape_website(url, domain):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
+    visited = set()
+    to_visit = [url]
+    written = set()
 
-# Step 1
-raw_documents = TextLoader("./data.txt").load()
+    with open('new-handyman.txt', 'w') as f:
+        while to_visit:
+            url = to_visit.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
 
-# Step 2
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=100, chunk_overlap=20, length_function=len
-)
-documents = text_splitter.split_documents(raw_documents)
+            response = requests.get(url, headers=headers)
+            soup = BeautifulSoup(response.text, 'html.parser')
 
-# Step 3
-embeddings_model = OpenAIEmbeddings(openai_api_key="YOUR_OPENAI_API_KEY")
-db = FAISS.from_documents(documents, embeddings_model)
+            # Remove script and style elements
+            for script in soup(["script", "style"]):
+                script.extract()
 
-# Step 4
-retriever = db.as_retriever()
+            for tag in soup.find_all(True):
+                if tag.name == 'a':
+                    link = urljoin(url, tag.get('href'))
+                    # Skip mailto links
+                    if 'mailto:' in link:
+                        continue
+                    if domain in link and link not in visited:
+                        to_visit.append(link)
+                elif tag.string:
+                    line = tag.string.strip()
+                    if line and line not in written:
+                        f.write(line + '\n')
+                        written.add(line)
 
-# Step 5
-llm_src = ChatOpenAI(temperature=0.3, model="gpt-4-turbo-preview", openai_api_key="YOUR_OPENAI_API_KEY")
-qa_chain = create_qa_with_sources_chain(llm_src)
-retrieval_qa = ConversationalRetrievalChain.from_llm(
-    llm_src,
-    retriever,
-    return_source_documents=True,
-)
-
-# Output
-output = retrieval_qa({
-    "question": "Who are the engineers at the gp?",
-    "chat_history": []
-})
-print(f"Question: {output['question']}")
-print(f"Answer: {output['answer']}")
-print(f"Source: {output['source_documents'][0].metadata['source']}")
+scrape_website('https://handymanconnection.com', 'handymanconnection.com')
